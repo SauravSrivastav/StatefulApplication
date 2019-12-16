@@ -1,0 +1,32 @@
+trigger:
+- master
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+- task: Docker@2
+  inputs:
+    containerRegistry: 'hclcloudnativeacr'
+    repository: 'net-app'
+    command: 'buildAndPush'
+    Dockerfile: '**/Dockerfile'
+    tags: |
+      v-$(Build.BuildNumber)
+      latest
+- script: |
+    echo "Replacing vars in k8s/net-app.yaml"
+    sed -i 's/BUILDNUM/$(Build.BuildNumber)/g; s/AKSURL/$(aksurl)/g; s/ACRURL/$(acrurl)/g' k8s/net-app.yaml
+  displayName: 'Replace vars in k8s yaml'
+
+- task: CopyFiles@2
+  inputs:
+    SourceFolder: 'k8s'
+    Contents: '**'
+    TargetFolder: '$(Build.ArtifactStagingDirectory)'
+
+- task: PublishBuildArtifacts@1
+  inputs:
+    PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+    ArtifactName: 'drop'
+    publishLocation: 'Container'
