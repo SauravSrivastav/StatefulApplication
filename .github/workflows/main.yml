@@ -1,0 +1,61 @@
+on: [push]
+
+# Environment variables available to all jobs and steps in this workflow
+env:
+  REGISTRY_NAME: hclcloudnativeacr
+  CLUSTER_NAME: hclcloudnativeaks
+  CLUSTER_RESOURCE_GROUP: cloudnative-rg
+  NAMESPACE: default
+  acrurl: hclcloudnativeacr.azurecr.io
+  aksurl: 9ed687322dca43e99409.eastus.aksapp.io
+  
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@master
+    
+    # Connect to Azure Container registry (ACR)
+    - uses: azure/docker-login@v1
+      with:
+        login-server: ${{ env.REGISTRY_NAME }}.azurecr.io
+        username: ${{ secrets.REGISTRY_USERNAME }} 
+        password: ${{ secrets.REGISTRY_PASSWORD }}
+    
+    # Container build and push to a Azure Container registry (ACR)
+    - run: docker build-push . --file **/Dockerfile hclcloudnativeacr net-app --tags v-${{ env.Build.BuildNumber }},latest
+    - name: Replace vars in k8s yaml
+      run: |
+        echo "Replacing vars in k8s/net-app.yaml"
+        sed -i 's/BUILDNUM/${{ env.Build.BuildNumber }}/g; s/AKSURL/${{ env.aksurl }}/g; s/ACRURL/${{ env.acrurl }}/g' k8s/net-app.yaml
+    
+    # Set the target Azure Kubernetes Service (AKS) cluster. 
+    - uses: azure/aks-set-context@v1
+      with:
+        creds: '${{ secrets.AZURE_CREDENTIALS }}'
+        cluster-name: ${{ env.CLUSTER_NAME }}
+        resource-group: ${{ env.CLUSTER_RESOURCE_GROUP }}
+    
+    # Create namespace if doesn't exist
+    - run: |
+        kubectl create namespace ${{ env.NAMESPACE }} --dry-run -o json | kubectl apply -f -
+    
+    # Create imagepullsecret for Azure Container registry (ACR)
+    - uses: azure/k8s-create-secret@v1
+      with:
+        container-registry-url: ${{ env.REGISTRY_NAME }}.azurecr.io
+        container-registry-username: ${{ secrets.REGISTRY_USERNAME }}
+        container-registry-password: ${{ secrets.REGISTRY_PASSWORD }}
+        secret-name: ${{ env.REGISTRY_NAME }}-registry-connection
+        namespace: ${{ env.NAMESPACE }}
+    
+    # Deploy app to AKS
+    - uses: azure/k8s-deploy@v1
+      with:
+        manifests: |
+          k8s/net-app.yaml
+        images: |
+          ${{ env.REGISTRY_NAME }}.azurecr.io/myimage:${{ github.sha }}
+        imagepullsecrets: |
+          ${{ env.REGISTRY_NAME }}-registry-connection
+        namespace: ${{ env.NAMESPACE }}
